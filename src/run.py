@@ -20,15 +20,19 @@ import sys
 import time
 import numpy as np
 
-frameDelay = 10  # Period between two frame
+frameDelay = 10     # Period between two frame
+batch_size = 50     # Number of data lines stored in the buffer before writing to the csv file
 
 relay = LED(4)
 relayON = False
 
+data_collection_Start_hour = 6
+data_collection_Stop_hour = 18
+
 ds3231 = SDL_DS3231.SDL_DS3231(1, 0x68)
 # ds3231.write_now() # Write the current time to the RTC
 # seconds [0,59], minutes [0,59], hours [0,23], day [0,7], date [1-31], month [1-12], year [0-99].
-# ds3231.write_all(00,7,10,3,19,10,22,save_as_24h=True)
+# ds3231.write_all(00,51,9,2,25,10,22,save_as_24h=True)
 
 magOffset =-108 # correction to align north to x axis
 compass = QMC5883(xOffset = -1168.5 , yOffset = -800.0 , zOffset = 1762.5)
@@ -36,30 +40,36 @@ compass = QMC5883(xOffset = -1168.5 , yOffset = -800.0 , zOffset = 1762.5)
 picam = PiCamera()
 picam.led = True # turn off the camera led
 picam.resolution = (2592, 1944)
+picam.iso = 20
+picam.shutter_speed = 200 # in microseconds
 
 dataDir = '/media/pi/usb-stick/solar/data/'
 
 def appendToCSV(filePath,data):
-    print('\n---Saving data in the CSV file---')
     with open(filePath, 'a') as f:
         np.savetxt(f, data,delimiter=',',fmt='%s')
         f.close()
-    print('-------------Done----------------')
+    outputMsg('Buffer saved to the CSV')
 
-def getCopmassData():
+
+def getCompassData():
     (dataReady,dataOverflow,dataSkippedForReading) = compass.status()
     if (dataReady == 1): 
         (x,y,z,rotX,rotY,rotZ) = compass.heading()
         compass_temp = compass.getTemperature()
         heading = rotZ + magOffset
-    else: print('Error: Compass data is not ready!!')
+    else: outputMsg('Error: Compass data is not ready')
     return compass_temp, heading
 
-def getDateTime():
+def getDateTime(dateSeparator,timeSeparator):
     _dateTime = ds3231.read_datetime()
-    RTC_date = _dateTime.strftime("%Y-%m-%d")   # Select and format only the date from the datatime object
-    RTC_time = _dateTime.strftime("%H_%M_%S")
+    RTC_date = _dateTime.strftime("%Y{}%m{}%d".format(dateSeparator,dateSeparator))   # Select and format only the date from the datatime object
+    RTC_time = _dateTime.strftime("%H{}%M{}%S".format(timeSeparator,timeSeparator))
     return RTC_date, RTC_time
+
+def outputMsg(t):
+    RTC_date, RTC_time = getDateTime('-',':')
+    print('[{} {}]: {}'.format(RTC_date, RTC_time,t))
 
 def main():
     i = 0
@@ -70,50 +80,55 @@ def main():
     ina.set_low_battery(5)
     time.sleep(3)
 
-    r = []
-    try:
-        while True:
-            ina.wake(3)
-            time.sleep(frameDelay)
-            if relayON: 
-                relay.off()
-                relayON = False
-                if ina.is_conversion_ready(): i = ina.current()
-                    
-            else: 
-                relay.on()
-                relayON = True
-                if ina.is_conversion_ready(): v = ina.voltage()
+    buffer = []
+    outputMsg('Initialization Complete')
 
-            RTC_date, RTC_time = getDateTime()
-            if (int(RTC_date[:4]) < 2022):
-                print('ERROR: Please reset the time of the the RTC module!')
-                print('RTC date & time: {} {}'.format(RTC_date, RTC_time))
-                break
-            compass_temp, heading = getCopmassData()
+    _,current_time = getDateTime('-',':')
+    hour = int(current_time[:2])
+    print(hour)
 
-            imagePath = dataDir + RTC_date
-            csvPath = imagePath + '/' + RTC_date + '.csv'
+    while True:
+        while (hour < data_collection_Start_hour and hour > data_collection_Start_hour):
+            outputMsg('Waiting for the')
+            time.sleep(10)
 
-            if (not os.path.exists(imagePath)): os.makedirs(imagePath)      # Create a directory for each new day
-            if (not os.path.exists(csvPath)): open(csvPath, "w")            # Create new CSV for each new day
+        ina.wake(3)
+        time.sleep(frameDelay)
+        if relayON: 
+            relay.off()
+            relayON = False
+            if ina.is_conversion_ready(): i = ina.current()
+                
+        else: 
+            relay.on()
+            relayON = True
+            if ina.is_conversion_ready(): v = ina.voltage()
 
-            picam.capture(dataDir+'{}/{}.jpg'.format(RTC_date,RTC_time))    # Capture one image
+        RTC_date, RTC_time = getDateTime('-','_')
+        if (int(RTC_date[:4]) < 2022):
+            outputMsg('ERROR: Please reset the time of the the RTC module!')
+            outputMsg('Program exit')
+            break
+        compass_temp, heading = getCompassData()
 
-            sys.stdout.write("\r{} - {} - Power:{:.3f}W - Temp:{:.2f}°C - Heading:{:3.0f}° - Length of r:{}".format(RTC_date, RTC_time, i*v/1000, compass_temp, heading,len(r)))
-            sys.stdout.flush()
-            
-            r.append('{}, {:.3f}, {:.2f}, {}\r'.format(RTC_time, i*v/1000, compass_temp, heading))
+        imagePath = dataDir + RTC_date
+        csvPath = imagePath + '/' + RTC_date + '.csv'
 
-            if (len(r) >= 50): 
-                appendToCSV(csvPath,r)
-                r = []
-        print('\nProgram exit..!')
+        if (not os.path.exists(imagePath)): os.makedirs(imagePath)      # Create a directory for each new day
+        if (not os.path.exists(csvPath)): open(csvPath, "w")            # Create new CSV for each new day
 
-    except KeyboardInterrupt:
-        print('\n-------Keyboard interrupt-------')
-        appendToCSV(csvPath,r)
+        picam.capture(dataDir+'{}/{}.jpg'.format(RTC_date,RTC_time))    # Capture one image
+
+        # sys.stdout.write("\r{} - {} - Power:{:.3f}W - Temp:{:.2f}°C - Heading:{:3.0f}° - Length of r:{}".format(RTC_date, RTC_time, i*v/1000, compass_temp, heading,len(r)))
+        # sys.stdout.flush()
         
+        buffer.append('{}, {:.3f}, {:.2f}, {}\r'.format(RTC_time, i*v/1000, compass_temp, heading))
+
+        if (len(buffer) >= batch_size): 
+            appendToCSV(csvPath,buffer)
+            buffer = []
+
+
 
 if __name__ == "__main__":
     main()
