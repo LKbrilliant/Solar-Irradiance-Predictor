@@ -26,7 +26,7 @@ import matplotlib.dates as mdates
 import threading
 
 frameDelay = 10     # Period between two frame
-batch_size = 50     # Number of data lines stored in the buffer before writing to the csv file
+batch_size = 50     # Number of data rows stored in the buffer before writing to the csv file
 
 relay = LED(4)
 relayON = False
@@ -134,7 +134,17 @@ def getCompassData():
         return compass_temp, heading
     else: outputMsg('Error: Compass data is not ready')
 
+# def saveAndUpdate():
+#     lineCount = appendToCSV(csvPath,buffer)
+#     buffer = []
+#     today, _ = getDateTime('-','_')
+#     tail = logTail(10)
+#     with open(f'{scriptPath}/index.html',"w") as f:
+#         f.write(f'<!DOCTYPE html><head><meta http-equiv="refresh" content="30"/><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Solar Status</title></head><body style="text-align:center; width: 100%; height: 100%;"><h1>Solar Data Collection Status</h1><h3>Page loading correctly means the Raspberry Pi running.</h3><h4>{today}: Current data count for - {lineCount} </h4><img src="plot.png" alt="Plot" width="70%" height="70%"><h3 >Last log entries:</h3><table style="margin: 0px auto;border: 2px solid black; width:50%"><tr><td style="text-align:left;padding-left: 5px;font: 12px monospace;">{tail}</td></tr></table></body></html>')
+#         f.close()
+
 def main():
+    outputMsg('System Rebooted')
     i = 0
     v = 0
     global relayON
@@ -144,18 +154,18 @@ def main():
     time.sleep(3)
 
     buffer = []
-    outputMsg('Initialization Complete')
-
-    _,current_time = getDateTime('-',':')
-    hour = int(current_time[:2])
     outputMsg('Data Collection Started')
     makeTheGraph() # Start the periodic plotting function
     try:
         while True:
-            while (not(data_collection_Start_hour <= hour and hour <= data_collection_Stop_hour)):
-                outputMsg('Waiting for the schedule')
+            _,current_time = getDateTime('-',':')
+            hour = int(current_time[:2])
+            while (not(data_collection_Start_hour < hour < data_collection_Stop_hour)):     # Wait until the next schedule
+                _,current_time = getDateTime('-',':')
+                hour = int(current_time[:2])
+                outputMsg('Waiting for the next schedule')
                 time.sleep(30)
-            
+
             ina.wake(3)
             time.sleep(frameDelay)
             if relayON: 
@@ -204,5 +214,11 @@ def main():
                     f.close()
     except Exception as e:
         outputMsg(f'Fatal Error withing the main loop ---- Exception: {e}')
+        outputMsg('Given Reboot command')
+        os.system("sudo reboot")
+    
+    except KeyboardInterrupt:
+        outputMsg(f'Keyboard interrupt')
+        
 if __name__ == "__main__":
     main()
